@@ -1,3 +1,12 @@
+/*
+  Loyd15 for arduino with DSP
+  Software by Zdeno Sekerak (c) 2015. www.trsek.com/en/curriculum
+
+  This software is distributed in the hope that it will be useful,
+  but WITHOUT ANY WARRANTY; without even the implied warranty of
+  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+*/
+
 #include <stdint.h>
 #include <EEPROM.h>
 #include "TouchScreen.h"
@@ -15,10 +24,10 @@
 #define YM 7   // can be a digital pin
 #define XP 6   // can be a digital pin
 
-#define TS_MINX 160
-#define TS_MINY 140
-#define TS_MAXX 880
-#define TS_MAXY 940
+#define TS_MINX    160
+#define TS_MINY    140
+#define TS_MAXX    880
+#define TS_MAXY    940
 
 // Assign human-readable names to some common 16-bit color values:
 #define BLACK   0x0000
@@ -31,11 +40,47 @@
 #define YELLOW  0xFFE0
 #define WHITE   0xFFFF
 
-#define MIN_TOUCH     10
-#define WIDTH         60    // width of button
-#define HEIGHT        60    // height of button
-#define _EEPROM_READ   0
-#define _EEPROM_WRITE  1
+#define MIN_TOUCH       10
+#define WIDTH           60    // width of button -> min( tft.width()/4, tft.height()/4)
+#define HEIGHT          60    // height of button
+#define _EEPROM_READ     0
+#define _EEPROM_WRITE    1
+
+#define MAX_MOVES       21    // for recursion (max=31), but 22 enought for all type
+#define BLINK_TIME    1500    // blink solve button when solution takes a long time
+#define SOLVE_DELAY    200    // time how long show press button in automatic 
+#define SOLVE_MAX_TIME  13    // time = SOLVE_MAX_TIME * BLINK_TIME
+#define BUTTON_DELAY   300    // time how long show press button
+#define BUTTON_SPECIAL  20    // more like 16 for special moves
+#define DEBUG               // when you want see debug in serial monitor
+
+typedef enum T_enum_move {
+  e_move_start,
+  e_move_left,
+  e_move_right,
+  e_move_up,
+  e_move_down,
+};
+
+typedef struct T_find_button {
+  Adafruit_GFX_Button *button;
+  unsigned long time;
+  byte count;
+};
+
+typedef struct T_moves {
+  byte count;
+  byte moves[MAX_MOVES];
+};
+
+// structure solve - strong packet because it use in recursion
+typedef struct T_loyd {
+  byte square[2][4];
+  byte hole_x:4, 
+       hole_y:4;
+  byte last_move:3, 
+       count: 5;
+};
 
 Adafruit_TFTLCD tft(LCD_CS, LCD_CD, LCD_WR, LCD_RD, LCD_RESET);
 TouchScreen ts = TouchScreen(XP, YP, XM, YM, 300);
@@ -49,8 +94,240 @@ Adafruit_GFX_Button button_load;
 byte loyd[4][4];
 byte moves;
 char text[3];
+
+// -----------------------------------------------------------------------------
+// global variables for solve
+T_moves win_moves;
+T_moves akt_moves;
+byte solve_number;
+byte border_y, border_x;
+T_find_button fbutton;
 // -----------------------------------------------------------------------------
 
+void solveRecursion(T_loyd loyd_solve, T_enum_move act_move);
+T_enum_move oppositeMove(T_enum_move act_move);
+// -----------------------------------------------------------------------------
+
+#define GET_SOLVE(x,y)     ((loyd_solve.square[(x)/2][(y)] >> (((x)%2)? 0:4)) & 0x0F)
+#define GETP_SOLVE(x,y)    ((loyd_solve->square[(x)/2][(y)] >> (((x)%2)? 0:4)) & 0x0F)
+#define PUT_SOLVE(x,y,c)   (loyd_solve.square[(x)/2][(y)] = ((x)%2)? ((loyd_solve.square[(x)/2][(y)] & 0xF0) + (c)) : ((loyd_solve.square[(x)/(2)][(y)] & 0x0F) + ((c) << 4)) )
+
+T_enum_move oppositeMove(T_enum_move act_move)
+{
+  switch( act_move )
+  {
+   case e_move_left  :  return e_move_right;
+   case e_move_right :  return e_move_left;
+   case e_move_up    :  return e_move_down;
+   case e_move_down  :  return e_move_up;
+   case e_move_start :
+   default:             return e_move_up;
+  }
+}
+// -----------------------------------------------------------------------------
+
+bool isSolve(struct T_loyd *loyd_solve)
+{
+  byte number;
+  
+  // special for 1-4
+  if( solve_number >= BUTTON_SPECIAL )
+  {
+    number = solve_number - BUTTON_SPECIAL;
+    for(byte i=0; i<number; i++)
+    {
+      if( GETP_SOLVE(i, 0) != (i+1))
+        return false;
+    }
+    for(byte i=0; i< 4; i++)
+    {
+      if(( GETP_SOLVE(i, 0) == (number+1))
+      || ( GETP_SOLVE(i, 1) == (number+1)))
+        return true;
+    }
+    return false;
+  }
+    
+  for(byte i=0; i<=solve_number; i++)
+  {
+    if( GETP_SOLVE(i%4, i/4) != (i+1))
+      return false;
+  }
+  return true;
+}
+// -----------------------------------------------------------------------------
+
+void solveRecursion(T_loyd loyd_solve, T_enum_move act_move)
+{
+   // something already has and a long would it take, I resigned for ideal solution
+   if(( win_moves.count < MAX_MOVES ) 
+   && ( fbutton.count > SOLVE_MAX_TIME ))
+   {
+      return;
+   }
+  
+   // add this move
+   switch ( act_move )
+   {
+   case e_move_left  :
+         PUT_SOLVE(loyd_solve.hole_x, loyd_solve.hole_y, GET_SOLVE(loyd_solve.hole_x-1, loyd_solve.hole_y));
+         loyd_solve.hole_x--;
+         break;
+   case e_move_right :
+         PUT_SOLVE(loyd_solve.hole_x, loyd_solve.hole_y, GET_SOLVE(loyd_solve.hole_x+1, loyd_solve.hole_y));
+         loyd_solve.hole_x++;
+         break;
+   case e_move_up    :
+         PUT_SOLVE(loyd_solve.hole_x, loyd_solve.hole_y, GET_SOLVE(loyd_solve.hole_x, loyd_solve.hole_y-1));
+         loyd_solve.hole_y--;
+         break;
+   case e_move_down  :
+         PUT_SOLVE(loyd_solve.hole_x, loyd_solve.hole_y, GET_SOLVE(loyd_solve.hole_x, loyd_solve.hole_y+1));
+         loyd_solve.hole_y++;
+         break;
+   }
+
+   PUT_SOLVE(loyd_solve.hole_x, loyd_solve.hole_y, 0);
+   loyd_solve.last_move = act_move;
+   akt_moves.moves[ loyd_solve.count++ ] = loyd_solve.hole_y*4 + loyd_solve.hole_x;
+
+   // great - it is solve (one of the many)
+   if( isSolve(&loyd_solve))
+   {
+      akt_moves.count = loyd_solve.count;
+      win_moves = akt_moves;
+#ifdef DEBUG
+      Serial.print("  count = ");
+      Serial.println(win_moves.count);
+#endif
+      return;
+   }
+   
+   // actually I have a shorter solutions, don't continue
+   if(( loyd_solve.count + 1 ) >= win_moves.count )
+   {
+      return;
+   }
+
+   // button blink
+   if(( fbutton.time + BLINK_TIME ) <= millis())
+   {
+      fbutton.time = millis();
+      fbutton.count++;
+      fbutton.button->press( !fbutton.button->isPressed());
+      fbutton.button->drawButton( fbutton.button->isPressed());
+   }
+
+   // try all direction's
+   if((oppositeMove( act_move ) != e_move_left )  && ( loyd_solve.hole_x != border_x )) solveRecursion(loyd_solve, e_move_left);
+   if((oppositeMove( act_move ) != e_move_right ) && ( loyd_solve.hole_x != 3 ))        solveRecursion(loyd_solve, e_move_right);
+   if((oppositeMove( act_move ) != e_move_up )    && ( loyd_solve.hole_y != border_y )) solveRecursion(loyd_solve, e_move_up);
+   if((oppositeMove( act_move ) != e_move_down )  && ( loyd_solve.hole_y != 3 ))        solveRecursion(loyd_solve, e_move_down);
+}
+// -----------------------------------------------------------------------------
+
+// initialize all structure for start solve
+struct T_loyd initSolve(byte number)
+{
+   struct T_loyd loyd_solve;
+   
+   for(int y=0; y<4; y++)
+    for(int x=0; x<4; x++)
+    {
+      PUT_SOLVE(x,y, loyd[x][y]);
+      if(loyd[x][y] == 0)
+      {
+        loyd_solve.hole_x = x;
+        loyd_solve.hole_y = y;
+      }
+      if(loyd[x][y] == number)
+      {
+        fbutton.button = &button[x][y];
+      }
+    }
+
+    fbutton.count = 0;
+    fbutton.time = millis();
+    
+    loyd_solve.last_move = e_move_start;
+    loyd_solve.count = 0;
+    
+    win_moves.count = MAX_MOVES;
+    akt_moves.count = 0;
+    return loyd_solve;
+}
+// -----------------------------------------------------------------------------
+
+// show win moves
+void viewSolve(struct T_moves* win_moves)
+{
+  byte x, y;
+  byte xv, yv;
+
+  for(int i=0; i<min(win_moves->count, MAX_MOVES); i++)
+  {
+    x = win_moves->moves[i] % 4;
+    y = win_moves->moves[i] / 4;
+    button[x][y].drawButton(true);
+    delay(SOLVE_DELAY);
+
+    // around is a free button
+    if(freeButton(x, y, &xv, &yv))
+    {
+      changeButtons(x, y, xv, yv);
+      redrawSquare(x, y, xv, yv);
+      moves++;
+    }
+    else
+      button[x][y].drawButton(false);
+  }
+}
+// -----------------------------------------------------------------------------
+
+void solveLoyd15()
+{
+   T_loyd loyd_solve;
+   unsigned long time_sum = millis();
+
+   border_x = 0;
+   border_y = 0;
+   moves = 0;
+   
+   for(int i=1; i<=15; i++)
+   {
+     // is possible reduce square, will be quickly
+     if( i > 4 ) border_y = 1;
+     if( i > 8 ) border_y = 2;
+     if( i > 13 ) border_x = 1;
+#ifdef DEBUG
+     Serial.print("solve ");
+     Serial.println(i);
+#endif
+     // special for most hard solve of button 4
+     if( i <= 4 )
+     {
+        loyd_solve = initSolve(i);
+        solve_number = i-1;
+        solve_number += BUTTON_SPECIAL;
+        
+        solveRecursion(loyd_solve, e_move_start);
+        fbutton.button->drawButton(false);
+        viewSolve(&win_moves);
+     }
+     
+     loyd_solve = initSolve(i);
+     solve_number = i-1;
+     
+     solveRecursion(loyd_solve, e_move_start);
+     fbutton.button->drawButton(false);
+     viewSolve(&win_moves);
+   }
+
+#ifdef DEBUG
+   Serial.print("sum time = "); Serial.print((millis()-time_sum) / 1000); Serial.println(" [s]");
+#endif
+}
+// -----------------------------------------------------------------------------
 
 // save/load play square to/from EEPROM
 void EEPROM_modul(byte mode)
@@ -179,7 +456,7 @@ void mixLoyd15(void)
 {
   byte x,y;
   
-  // znulujeme  
+  // clear
   for(int y=0; y<4; y++)
     for(int x=0; x<4; x++)
     {
@@ -210,7 +487,7 @@ void mixLoyd15(void)
      loyd[x][y] = i;
   }
   
-  // when is not possible solve it then change 2 squares anf try again
+  // when is not possible solve it then change 2 squares and try again
   while( !isPossibleSolve())
   {
     x = random(0,3);
@@ -292,18 +569,18 @@ void showWin()
 void setup(void) 
 {
   Serial.begin(9600);
-  Serial.println(F("Loyd 15. Software by Zdeno Sekerak (c) 2015."));
+  Serial.println(F("Loyd 15 ver0.9. Software by Zdeno Sekerak (c) 2015."));
   randomSeed(analogRead(0));
 
   tft.reset();
   tft.begin(tft.readID());
+  tft.fillScreen(BLACK);
 
   mixLoyd15();
   moves = 0;
-  tft.fillScreen(BLACK);
   redrawSquare(0,0,0,0);
   
-  // button nova
+  // buttons
   button_new.initButton  (&tft,  62,260, 105,32, 1,GREEN, MAGENTA, "New", 2);
   button_solve.initButton(&tft,  62,294, 105,32, 1,GREEN, MAGENTA, "Solve", 2);
   button_save.initButton (&tft, 177,260, 105,32, 1,GREEN, MAGENTA, "Save", 2);
@@ -317,52 +594,11 @@ void setup(void)
   tft.setTextColor(BLUE);
   tft.setTextSize(1);
   tft.setCursor(20, 311);
-  tft.print(F("Software by Zdeno Sekerak (c) 2015"));  
+  tft.print(F("Software by Zdeno Sekerak (c) 2015"));
 }
 // -----------------------------------------------------------------------------
 
-void solveFake()
-{
-  int x, y;
-  byte xv,yv;
-  
-  for(int i=75; i>1; i--)
-  {
-      // find space
-     x = random(0,4);
-     y = random(0,4);
-     
-     while( !freeButton(x, y, &xv, &yv))
-     {
-       x++;
-       if( x>3 )
-       {
-         y++;
-         x=0;
-       }
-       
-       if( y>3 )
-       {
-         x=0;
-         y=0;
-       }
-       
-     } // while
-     
-     changeButtons(x, y, xv, yv);
-     redrawSquare(x, y, xv, yv);
-     delay(3*i);
-  }
-  
-  // solve it, horray
-  for(int i=0; i<15; i++)
-      loyd[i%4][i/4] = i+1;
-      
-  loyd[3][3] = 0;
-}
-// -----------------------------------------------------------------------------
-
-void loop(void) 
+void loop(void)
 {
   TSPoint p = ts.getPoint();
   byte xv,yv;
@@ -388,9 +624,10 @@ void loop(void)
     if( button_solve.contains(p.x, p.y))
     {
        button_solve.drawButton(true);
-       delay(100);
+       delay( BUTTON_DELAY/3 );
        button_solve.drawButton(false);
-       solveFake();
+       solveLoyd15();
+       showWin();
        redrawSquare(0,0,0,0);
        return;
     }
@@ -399,7 +636,7 @@ void loop(void)
     {
        button_save.drawButton(true);
        EEPROM_modul(_EEPROM_WRITE);
-       delay(100);
+       delay( BUTTON_DELAY );
        button_save.drawButton(false);
        return;
     }
@@ -409,7 +646,7 @@ void loop(void)
        button_load.drawButton(true);
        EEPROM_modul(_EEPROM_READ);
        redrawSquare(0,0,0,0);
-       delay(100);
+       delay( BUTTON_DELAY/3 );
        button_load.drawButton(false);
        return;
     }
@@ -420,7 +657,7 @@ void loop(void)
         if( button[x][y].contains(p.x, p.y))
         {
           button[x][y].drawButton(true);
-          delay(300);
+          delay( BUTTON_DELAY );
           // around is a free button
           if(freeButton(x, y, &xv, &yv))
           {
