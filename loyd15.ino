@@ -1,5 +1,5 @@
 /*
-  Loyd15 for arduino with DSP
+  Loyd15 for Arduino with touch LCD
   Software by Zdeno Sekerak (c) 2015. www.trsek.com/en/curriculum
 
   This software is distributed in the hope that it will be useful,
@@ -51,8 +51,8 @@
 #define SOLVE_DELAY    200    // time how long show press button in automatic 
 #define SOLVE_MAX_TIME  13    // time = SOLVE_MAX_TIME * BLINK_TIME
 #define BUTTON_DELAY   300    // time how long show press button
-#define BUTTON_SPECIAL  20    // more like 16 for special moves
-#define DEBUG               // when you want see debug in serial monitor
+#define SOLVE_APPROX    20    // number must be more like 16 and mean special moves
+//#define DEBUG               // when you want see debug info in serial monitor
 
 typedef enum T_enum_move {
   e_move_start,
@@ -102,6 +102,7 @@ T_moves akt_moves;
 byte solve_number;
 byte border_y, border_x;
 T_find_button fbutton;
+byte solve_process[] = {SOLVE_APPROX + 1, 1, SOLVE_APPROX + 2, 2, SOLVE_APPROX + 3, 3, SOLVE_APPROX + 4, 4, 5, 6, 7, 8, 9, 13, 10, 11, 12, 14, 15 };
 // -----------------------------------------------------------------------------
 
 void solveRecursion(T_loyd loyd_solve, T_enum_move act_move);
@@ -126,29 +127,43 @@ T_enum_move oppositeMove(T_enum_move act_move)
 }
 // -----------------------------------------------------------------------------
 
+
 bool isSolve(struct T_loyd *loyd_solve)
 {
-  byte number;
+  byte number, y;
   
   // special for 1-4
-  if( solve_number >= BUTTON_SPECIAL )
+  if( solve_number >= SOLVE_APPROX )
   {
-    number = solve_number - BUTTON_SPECIAL;
-    for(byte i=0; i<number; i++)
+    number = solve_number - SOLVE_APPROX;
+		y = (number-1) /4;
+
+    for(byte i=0; i<(number-1); i++)
     {
-      if( GETP_SOLVE(i, 0) != (i+1))
+      if( GETP_SOLVE(i%4, i/4) != (i+1))
         return false;
     }
-    for(byte i=0; i< 4; i++)
+    for(byte i=0; i<4; i++)
     {
-      if(( GETP_SOLVE(i, 0) == (number+1))
-      || ( GETP_SOLVE(i, 1) == (number+1)))
+      if(( GETP_SOLVE(i, y) == number)
+      || ( GETP_SOLVE(i, y+1) == number))
         return true;
     }
     return false;
   }
+
+	// special for 13
+	if( solve_number == 13 )
+	{
+     for(byte i=0; i<9; i++)
+     {
+       if( GETP_SOLVE(i%4, i/4) != (i+1))
+          return false;
+     }
+		 return (GETP_SOLVE(0,3) == 13);
+	}
     
-  for(byte i=0; i<=solve_number; i++)
+  for(byte i=0; i<solve_number; i++)
   {
     if( GETP_SOLVE(i%4, i/4) != (i+1))
       return false;
@@ -157,6 +172,7 @@ bool isSolve(struct T_loyd *loyd_solve)
 }
 // -----------------------------------------------------------------------------
 
+// most important function - do not touch if you don't know
 void solveRecursion(T_loyd loyd_solve, T_enum_move act_move)
 {
    // something already has and a long would it take, I resigned for ideal solution
@@ -197,7 +213,7 @@ void solveRecursion(T_loyd loyd_solve, T_enum_move act_move)
       akt_moves.count = loyd_solve.count;
       win_moves = akt_moves;
 #ifdef DEBUG
-      Serial.print("  count = ");
+      Serial.print("  moves = ");
       Serial.println(win_moves.count);
 #endif
       return;
@@ -231,6 +247,9 @@ struct T_loyd initSolve(byte number)
 {
    struct T_loyd loyd_solve;
    
+   if( number >= SOLVE_APPROX )
+	     number -= SOLVE_APPROX;
+
    for(int y=0; y<4; y++)
     for(int x=0; x<4; x++)
     {
@@ -264,6 +283,8 @@ void viewSolve(struct T_moves* win_moves)
   byte x, y;
   byte xv, yv;
 
+  fbutton.button->drawButton(false);
+
   for(int i=0; i<min(win_moves->count, MAX_MOVES); i++)
   {
     x = win_moves->moves[i] % 4;
@@ -279,7 +300,7 @@ void viewSolve(struct T_moves* win_moves)
       moves++;
     }
     else
-      button[x][y].drawButton(false);
+      button[x][y].drawButton(false);   //?! really
   }
 }
 // -----------------------------------------------------------------------------
@@ -293,34 +314,22 @@ void solveLoyd15()
    border_y = 0;
    moves = 0;
    
-   for(int i=1; i<=15; i++)
+   for(int ii=0; ii< (sizeof(solve_process)/sizeof(solve_process[0])); ii++)
    {
-     // is possible reduce square, will be quickly
-     if( i > 4 ) border_y = 1;
-     if( i > 8 ) border_y = 2;
-     if( i > 13 ) border_x = 1;
+     solve_number = solve_process[ii];
+     loyd_solve = initSolve(solve_number);
 #ifdef DEBUG
-     Serial.print("solve ");
-     Serial.println(i);
+     Serial.print("solving ");
+     Serial.println(solve_number);
 #endif
-     // special for most hard solve of button 4
-     if( i <= 4 )
-     {
-        loyd_solve = initSolve(i);
-        solve_number = i-1;
-        solve_number += BUTTON_SPECIAL;
-        
-        solveRecursion(loyd_solve, e_move_start);
-        fbutton.button->drawButton(false);
-        viewSolve(&win_moves);
-     }
-     
-     loyd_solve = initSolve(i);
-     solve_number = i-1;
-     
+
      solveRecursion(loyd_solve, e_move_start);
-     fbutton.button->drawButton(false);
      viewSolve(&win_moves);
+
+     // reduce square border, will be quickly
+     if( solve_number == 4 ) border_y = 1;
+     if( solve_number == 8 ) border_y = 2;
+     if( solve_number == 13 ) border_x = 1;
    }
 
 #ifdef DEBUG
@@ -569,7 +578,7 @@ void showWin()
 void setup(void) 
 {
   Serial.begin(9600);
-  Serial.println(F("Loyd 15 ver0.9. Software by Zdeno Sekerak (c) 2015."));
+  Serial.println(F("Loyd 15 ver0.91. Software by Zdeno Sekerak (c) 2015."));
   randomSeed(analogRead(0));
 
   tft.reset();
