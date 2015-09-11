@@ -1,4 +1,4 @@
-# Loyd15 for arduino with DSP
+# Loyd15 for Arduino with touch LCD
 
 HW Arduino Uno R3
 See www.arduuino.cc
@@ -19,11 +19,12 @@ Settings DSP:
 - define XP 6   // can be a digital pin
 
 - Consult from your hardware. SW is debugged for Identificator IDF=0x154. Chip NXP HC245 DY8400S TXD442E
-- design of screen is possible change in tftHomeScreen() function
 
 Game can do
 - generate new game + check if is possible solve
 - save/load with EEPROM
 - solve using smart recursion
 
-See video on https://www.youtube.com/watch?v=T8Fxc0txz_c&feature=youtu.be
+How it work see
+https://www.youtube.com/watch?v=_v7p95zSl_I&feature=youtu.be
+https://www.youtube.com/watch?v=T8Fxc0txz_c
