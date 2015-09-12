@@ -70,6 +70,7 @@ typedef struct T_find_button {
 
 typedef struct T_moves {
   byte count;
+  byte solve;
   byte moves[MAX_MOVES];
 };
 
@@ -99,6 +100,7 @@ char text[3];
 // global variables for solve
 T_moves win_moves;
 T_moves akt_moves;
+byte level;
 byte solve_number;
 byte border_y, border_x;
 T_find_button fbutton;
@@ -112,6 +114,7 @@ T_enum_move oppositeMove(T_enum_move act_move);
 #define GET_SOLVE(x,y)     ((loyd_solve.square[(x)/2][(y)] >> (((x)%2)? 0:4)) & 0x0F)
 #define GETP_SOLVE(x,y)    ((loyd_solve->square[(x)/2][(y)] >> (((x)%2)? 0:4)) & 0x0F)
 #define PUT_SOLVE(x,y,c)   (loyd_solve.square[(x)/2][(y)] = ((x)%2)? ((loyd_solve.square[(x)/2][(y)] & 0xF0) + (c)) : ((loyd_solve.square[(x)/(2)][(y)] & 0x0F) + ((c) << 4)) )
+
 
 T_enum_move oppositeMove(T_enum_move act_move)
 {
@@ -127,7 +130,6 @@ T_enum_move oppositeMove(T_enum_move act_move)
 }
 // -----------------------------------------------------------------------------
 
-
 bool isSolve(struct T_loyd *loyd_solve)
 {
   byte number, y;
@@ -136,7 +138,7 @@ bool isSolve(struct T_loyd *loyd_solve)
   if( solve_number >= SOLVE_APPROX )
   {
     number = solve_number - SOLVE_APPROX;
-		y = (number-1) /4;
+    y = (number-1) /4;
 
     for(byte i=0; i<(number-1); i++)
     {
@@ -153,15 +155,15 @@ bool isSolve(struct T_loyd *loyd_solve)
   }
 
 	// special for 13
-	if( solve_number == 13 )
-	{
+  if( solve_number == 13 )
+  {
      for(byte i=0; i<9; i++)
      {
        if( GETP_SOLVE(i%4, i/4) != (i+1))
           return false;
      }
-		 return (GETP_SOLVE(0,3) == 13);
-	}
+     return (GETP_SOLVE(0,3) == 13);
+  }
     
   for(byte i=0; i<solve_number; i++)
   {
@@ -176,7 +178,7 @@ bool isSolve(struct T_loyd *loyd_solve)
 void solveRecursion(T_loyd loyd_solve, T_enum_move act_move)
 {
    // something already has and a long would it take, I resigned for ideal solution
-   if(( win_moves.count < MAX_MOVES ) 
+   if(( win_moves.solve ) 
    && ( fbutton.count > SOLVE_MAX_TIME ))
    {
       return;
@@ -248,7 +250,7 @@ struct T_loyd initSolve(byte number)
    struct T_loyd loyd_solve;
    
    if( number >= SOLVE_APPROX )
-	     number -= SOLVE_APPROX;
+     number -= SOLVE_APPROX;
 
    for(int y=0; y<4; y++)
     for(int x=0; x<4; x++)
@@ -272,7 +274,9 @@ struct T_loyd initSolve(byte number)
     loyd_solve.count = 0;
     
     win_moves.count = MAX_MOVES;
+    win_moves.solve = false;
     akt_moves.count = 0;
+    akt_moves.solve = true;
     return loyd_solve;
 }
 // -----------------------------------------------------------------------------
@@ -299,8 +303,6 @@ void viewSolve(struct T_moves* win_moves)
       redrawSquare(x, y, xv, yv);
       moves++;
     }
-    else
-      button[x][y].drawButton(false);   //?! really
   }
 }
 // -----------------------------------------------------------------------------
@@ -333,7 +335,7 @@ void solveLoyd15()
    }
 
 #ifdef DEBUG
-   Serial.print("sum time = "); Serial.print((millis()-time_sum) / 1000); Serial.println(" [s]");
+   Serial.print("time = "); Serial.print((millis()-time_sum) / 1000); Serial.println(" [s]");
 #endif
 }
 // -----------------------------------------------------------------------------
@@ -348,6 +350,7 @@ void EEPROM_modul(byte mode)
            EEPROM.write(y*4+x, loyd[x][y]);
            
       EEPROM.write(sizeof(loyd), moves);
+      EEPROM.write(sizeof(loyd) + sizeof(moves), level);
   }
   else
   {
@@ -356,24 +359,45 @@ void EEPROM_modul(byte mode)
            loyd[x][y] = EEPROM.read(y*4+x);
            
       moves = EEPROM.read(sizeof(loyd));
+      level = EEPROM.read(sizeof(loyd) + sizeof(moves));
   }
 }
 // -----------------------------------------------------------------------------
 
 char* ConvertToChar(byte number)
 {
-  if( number >= 10 )
+  switch( level )
   {
-    text[0] = '0' + number / 10;
-    text[1] = '0' + number % 10;
+    case 3:                                       // random
+          number = random(1, number + 1);
+          /* no break; */
+    case 0:                                       // number
+          if( number >= 10 )
+          {
+            text[0] = '0' + number / 10;
+            text[1] = '0' + number % 10;
+          }
+          else
+          {
+            text[0] = '0' + number % 10;
+            text[1] = '\0';
+          }
+        
+          text[2] = '\0';
+          break;
+    case 1:                                       // alphabet
+          text[0] = 'A' + number - 1;
+          text[1] = '\0';
+          break;
+    case 2:                                       // hex
+          if( number >= 10 )
+            text[0] = 'A' + number - 9;
+          else
+            text[0] = '0' + number % 10;
+        
+          text[1] = '\0';
+          break;
   }
-  else
-  {
-    text[0] = '0' + number % 10;
-    text[1] = '\0';
-  }
-
-  text[2] = '\0';
   return text;
 }
 // -----------------------------------------------------------------------------
@@ -391,6 +415,7 @@ void redrawSquare(byte x, byte y, byte xv, byte yv)
     return;
   }
   
+  // all buttons
   for(int y=0; y<4; y++)
     for(int x=0; x<4; x++)
     {
@@ -550,20 +575,32 @@ void showWin()
 
   for(int i=0; i<10; i++)
   {
-    tft.fillRect(20, 100, 22*i, 8*i, BLACK);
+    tft.fillRect(20, 100, 22*i, 11*i, BLACK);
     delay(30);
   }
   
-  tft.setTextColor(WHITE);
+  tft.setTextColor(YELLOW);
   tft.setTextSize(3);
   tft.setCursor(25, 108);
   tft.print(F(" Solve it!"));
   
   tft.setTextSize(2);
   tft.setCursor(30, 145);
-  tft.print(F("need moves :"));
+  tft.print(F("need moves: "));
   tft.print(moves);
 
+  tft.setTextSize(2);
+  tft.setCursor(28, 171);
+  tft.print(F("next level:"));
+  level = (level+1) % 4;
+  switch(level)
+  {
+    case 0:  tft.print("numb"); break;
+    case 1:  tft.print("abcd"); break;
+    case 2:  tft.print("hex");   break;
+    case 3:  tft.print("rand");  break;  // numbers are randomize from <1,number>, never greather than number
+  }
+  
   do {
     p = ts.getPoint();
     pinMode(XM, OUTPUT);
@@ -571,15 +608,15 @@ void showWin()
   }
   while( p.z < MIN_TOUCH );
   
-  tft.fillRect(20, 100, 200, 80, BLACK);
+  tft.fillRect(20, 100, 200, 100, BLACK);
 }
 // -----------------------------------------------------------------------------
 
 void setup(void) 
 {
   Serial.begin(9600);
-  Serial.println(F("Loyd 15 ver0.91. Software by Zdeno Sekerak (c) 2015."));
-  randomSeed(analogRead(0));
+  Serial.println(F("Loyd 15 ver0.92. Software by Zdeno Sekerak (c) 2015."));
+  randomSeed(analogRead(A0));
 
   tft.reset();
   tft.begin(tft.readID());
@@ -587,6 +624,7 @@ void setup(void)
 
   mixLoyd15();
   moves = 0;
+  level = 0;
   redrawSquare(0,0,0,0);
   
   // buttons
